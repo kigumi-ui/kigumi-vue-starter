@@ -1,22 +1,31 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
+import { ref, onMounted, useAttrs, onBeforeUnmount, watch } from 'vue';
 import './Input.css';
 
 let loadPromise: Promise<unknown> | null = null;
 function ensureLoaded() {
-  return (loadPromise ??= import('@awesome.me/webawesome/dist/components/input/input.js'));
+  return (loadPromise ??=
+    import('@awesome.me/webawesome/dist/components/input/input.js'));
 }
 
 /**
  * Inputs collect data from the user
  */
 export interface InputProps {
-  type?: 'text' | 'email' | 'password' | 'number' | 'date' | 'tel' | 'url' | 'search';
+  type?:
+    | 'text'
+    | 'email'
+    | 'password'
+    | 'number'
+    | 'date'
+    | 'tel'
+    | 'url'
+    | 'search';
   label?: string;
   hint?: string;
   placeholder?: string;
   appearance?: 'filled' | 'filled-outlined' | 'outlined';
-  size?: 'small' | 'medium' | 'large';
+  size?: 'small' | 'medium' | 'large' | 'xs' | 's' | 'm' | 'l' | 'xl';
   pill?: boolean;
   disabled?: boolean;
   'with-clear'?: boolean;
@@ -36,29 +45,73 @@ export interface InputProps {
   autocapitalize?: 'off' | 'none' | 'on' | 'sentences' | 'words' | 'characters';
   autocorrect?: boolean;
   autofocus?: boolean;
-  inputmode?: 'none' | 'text' | 'decimal' | 'numeric' | 'tel' | 'search' | 'email' | 'url';
-  enterkeyhint?: 'enter' | 'done' | 'go' | 'next' | 'previous' | 'search' | 'send';
+  inputmode?:
+    | 'none'
+    | 'text'
+    | 'decimal'
+    | 'numeric'
+    | 'tel'
+    | 'search'
+    | 'email'
+    | 'url';
+  enterkeyhint?:
+    'enter' | 'done' | 'go' | 'next' | 'previous' | 'search' | 'send';
+  title?: string;
+  spellcheck?: boolean;
+  'custom-error'?: string;
 }
 
-const props = defineProps<InputProps>();
-
-// Strip undefined and false props before forwarding to the web component.
-// Vue boolean-prop coercion materializes absent optional Boolean props as
-// `false`, but Web Awesome elements read attribute presence as truthy, so
-// we must not forward `false` to <wa-*> (would render pill="" / loading="").
-const definedProps = computed(() => {
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(props as Record<string, unknown>)) {
-    if (value !== undefined && value !== false) result[key] = value;
-  }
-  return result;
+const props = withDefaults(defineProps<InputProps>(), {
+  autocorrect: undefined,
+  spellcheck: undefined,
 });
 
+defineOptions({ inheritAttrs: false });
+
+// Web Awesome reads these as enumerated attributes, not by presence:
+// `false` is written as its keyword rather than dropped.
+const ENUMERATED_ATTRIBUTES: Record<string, { true: string; false: string }> = {
+  autocorrect: { true: 'on', false: 'off' },
+  spellcheck: { true: 'true', false: 'false' },
+};
+
+// Forward props and fallthrough attributes to the web component yourself,
+// rather than through Vue's default fallthrough:
+// - Web Awesome reads attribute presence as truthy, so `false` must never
+//   reach <wa-*>. Vue materializes every absent optional Boolean prop as
+//   `false`, and would render a fallthrough `false` as the string "false".
+//   `aria-*` / `data-*` keep `false`, where "false" is a real value.
+// - Vue camelizes declared prop keys (`with-caret` -> `withCaret`). Before
+//   the element upgrades, that key lands as the attribute `withcaret`, which
+//   Web Awesome never reads, so props go back to their kebab-case names.
+// A plain function, not `computed`: `attrs` is tracked per property read,
+// so a computed over an empty `attrs` would never see a later attribute.
+const attrs = useAttrs();
+
+function hostAttributes(): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === 'class') continue;
+    if (value === false && !/^(aria|data)-/.test(key)) continue;
+    result[key] = value;
+  }
+  for (const [key, value] of Object.entries(props as Record<string, unknown>)) {
+    const keywords = ENUMERATED_ATTRIBUTES[key];
+    if (keywords && value !== undefined) {
+      result[`^${key}`] = value ? keywords.true : keywords.false;
+      continue;
+    }
+    if (value === undefined || value === false) continue;
+    result[key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)] = value;
+  }
+  return result;
+}
+
 const emit = defineEmits<{
-  'input': [event: CustomEvent];
-  'change': [event: CustomEvent];
-  'blur': [event: CustomEvent];
-  'focus': [event: FocusEvent];
+  input: [event: InputEvent];
+  change: [event: Event];
+  blur: [event: FocusEvent];
+  focus: [event: FocusEvent];
   'wa-clear': [event: CustomEvent];
   'wa-invalid': [event: CustomEvent];
 }>();
@@ -76,9 +129,12 @@ onMounted(() => {
   ensureLoaded();
 });
 
-const handleInput = (e: Event) => { model.value = (e.target as any).value; emit('input', e as CustomEvent); };
-const handleChange = (e: Event) => emit('change', e as CustomEvent);
-const handleBlur = (e: Event) => emit('blur', e as CustomEvent);
+const handleInput = (e: Event) => {
+  model.value = (e.target as any).value;
+  emit('input', e as InputEvent);
+};
+const handleChange = (e: Event) => emit('change', e as Event);
+const handleBlur = (e: Event) => emit('blur', e as FocusEvent);
 const handleFocus = (e: Event) => emit('focus', e as FocusEvent);
 const handleWaClear = (e: Event) => emit('wa-clear', e as CustomEvent);
 const handleWaInvalid = (e: Event) => emit('wa-invalid', e as CustomEvent);
@@ -95,7 +151,7 @@ onMounted(() => {
   el.addEventListener('wa-invalid', handleWaInvalid);
 });
 
-onUnmounted(() => {
+onBeforeUnmount(() => {
   const el = elementRef.value;
   if (!el) return;
 
@@ -111,13 +167,37 @@ defineExpose({
   focus: (options: FocusOptions) => (elementRef.value as any)?.focus?.(options),
   blur: () => (elementRef.value as any)?.blur?.(),
   select: () => (elementRef.value as any)?.select?.(),
-  setSelectionRange: (selectionStart: number, selectionEnd: number, selectionDirection: 'forward' | 'backward' | 'none') => (elementRef.value as any)?.setSelectionRange?.(selectionStart, selectionEnd, selectionDirection),
-  setRangeText: (replacement: string, start: number, end: number, selectMode: 'select' | 'start' | 'end' | 'preserve') => (elementRef.value as any)?.setRangeText?.(replacement, start, end, selectMode),
+  setSelectionRange: (
+    selectionStart: number,
+    selectionEnd: number,
+    selectionDirection: 'forward' | 'backward' | 'none'
+  ) =>
+    (elementRef.value as any)?.setSelectionRange?.(
+      selectionStart,
+      selectionEnd,
+      selectionDirection
+    ),
+  setRangeText: (
+    replacement: string,
+    start: number,
+    end: number,
+    selectMode: 'select' | 'start' | 'end' | 'preserve'
+  ) =>
+    (elementRef.value as any)?.setRangeText?.(
+      replacement,
+      start,
+      end,
+      selectMode
+    ),
   showPicker: () => (elementRef.value as any)?.showPicker?.(),
   stepUp: () => (elementRef.value as any)?.stepUp?.(),
   stepDown: () => (elementRef.value as any)?.stepDown?.(),
-  setCustomValidity: (message: string) => (elementRef.value as any)?.setCustomValidity?.(message),
-  formStateRestoreCallback: (state: string | File | FormData | null, reason: 'autocomplete' | 'restore') => (elementRef.value as any)?.formStateRestoreCallback?.(state, reason),
+  setCustomValidity: (message: string) =>
+    (elementRef.value as any)?.setCustomValidity?.(message),
+  formStateRestoreCallback: (
+    state: string | File | FormData | null,
+    reason: 'autocomplete' | 'restore'
+  ) => (elementRef.value as any)?.formStateRestoreCallback?.(state, reason),
   resetValidity: () => (elementRef.value as any)?.resetValidity?.(),
   element: elementRef,
 });
@@ -126,7 +206,7 @@ defineExpose({
 <template>
   <wa-input
     ref="elementRef"
-    v-bind="definedProps"
+    v-bind="hostAttributes()"
     :class="$attrs.class"
     :value="model"
   >
